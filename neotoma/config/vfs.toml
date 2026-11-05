@@ -1,0 +1,6 @@
+# Neotoma disks as the read-only `neotoma://` filesystem.
+[neotoma."*"]
+kind = "hub"
+run  = "neotoma"
+# Set this if the `neotoma` command-line tool is not on your PATH:
+# bin = "/usr/local/bin/neotoma"

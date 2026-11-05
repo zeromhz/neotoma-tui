@@ -1,0 +1,5 @@
+[mgr]
+prepend_keymap = [
+	{ on = [ "g", "n" ], run = "plugin neotoma",        desc = "Go to Neotoma disks" },
+	{ on = [ "g", "N" ], run = "plugin neotoma search", desc = "Search Neotoma catalogs" },
+]
