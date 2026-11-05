@@ -1,0 +1,7 @@
+[plugin]
+prepend_fetchers = [
+	{ url = "neotoma://*", run = "neotoma", prio = "high", group = "mime" },
+]
+prepend_previewers = [
+	{ mime = "neotoma/offline", run = "neotoma" },
+]
