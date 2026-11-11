@@ -85,10 +85,28 @@ local function dir_file(url)
 	return File { url = url, stat = stat, lstat = stat }
 end
 
+--- A number for one URL, used as a file's change time.
+---
+--- Yazi skips MIME detection for a file it has already examined, which it
+--- decides by the backing path plus the size and times, but it stores the result
+--- by URL. One original reached through a second URL (a search result after
+--- browsing to the file, a file inside a folder opened from a search, the same
+--- hit under two searches) would therefore never get a MIME type, and so no
+--- preview. The change time is part of that signature and Yazi shows it
+--- nowhere, so it carries a value derived from the URL.
+local function url_time(url)
+	local hash = 5381
+	-- The path alone: the same file's URL is spelled differently when it is listed and when it is looked up.
+	for _, byte in ipairs { tostring(url.path):byte(1, -1) } do
+		hash = (hash * 33 + byte) % 2147483647
+	end
+	return hash + 1
+end
+
 --- A catalog entry as a Yazi file. Unchanged connected originals become the
 --- file's backing, so previews and MIME detection read the real bytes.
 local function entry_file(url, e)
-	local stat = Stat { mode = e.dir and DIR_MODE or FILE_MODE, len = e.size, mtime = e.mtime }
+	local stat = Stat { mode = e.dir and DIR_MODE or FILE_MODE, len = e.size, mtime = e.mtime, ctime = url_time(url) }
 	local backing = not e.dir and e.state == "available" and e.original or nil
 	return File { url = url, stat = stat, lstat = stat, backing = backing and Path.os(backing) }
 end
