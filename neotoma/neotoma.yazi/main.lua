@@ -20,6 +20,17 @@ local SEP = "∕"
 local DIR_MODE = tonumber("40555", 8)
 local FILE_MODE = tonumber("100444", 8)
 
+--- True the first time it is asked about a search, so that a cut-off is announced once and not again each time
+--- the listing refreshes. Each call into the plugin starts from a fresh Lua state; this lives in Yazi's own.
+local first_time = ya.sync(function(state, query)
+	state.told = state.told or {}
+	if state.told[query] then
+		return false
+	end
+	state.told[query] = true
+	return true
+end)
+
 local function warn(content)
 	ya.notify { title = "Neotoma", content = tostring(content), timeout = 5, level = "warn" }
 end
@@ -80,8 +91,8 @@ end
 
 -- Files --------------------------------------------------------------------
 
-local function dir_file(url)
-	local stat = Stat { mode = DIR_MODE }
+local function dir_file(url, listed)
+	local stat = Stat { mode = DIR_MODE, ctime = listed }
 	return File { url = url, stat = stat, lstat = stat }
 end
 
@@ -94,34 +105,70 @@ end
 --- hit under two searches) would therefore never get a MIME type, and so no
 --- preview. The change time is part of that signature and Yazi shows it
 --- nowhere, so it carries a value derived from the URL.
-local function url_time(url)
-	-- The path alone: the same file's URL is spelled differently when it is listed and when it is looked up.
-	local path, hash = tostring(url.path), 5381
-	for i = 1, #path do
-		hash = (hash * 33 + path:byte(i)) % 2147483647
+local function text_time(text)
+	local hash = 5381
+	for i = 1, #text do
+		hash = (hash * 33 + text:byte(i)) % 2147483647
 	end
 	return hash + 1
 end
 
+-- The path alone: the same file's URL is spelled differently when it is listed and when it is looked up.
+local function url_time(url) return text_time(tostring(url.path)) end
+
+--- A number for the state a folder listing was made from, kept in the folder's
+--- change time.
+---
+--- Yazi asks every two seconds whether each open folder of a virtual
+--- filesystem changed, and lists it again unless the answer is no. Listing
+--- runs the `neotoma` tool, which opens the library. So the answer is worked
+--- out cheaply: `neotoma revision` reads three file times without opening the
+--- library, and a folder is listed again only when that value changes, or
+--- every half minute so that a disk being connected or disconnected shows up.
+--- An older `neotoma` without `revision` gives no value, and every folder is
+--- then listed again each time, as before.
+local function listing_time(job)
+	local value = run(job, { "revision" })
+	if not value or not value.revision then
+		return nil
+	end
+	return text_time(tostring(value.revision) .. ":" .. math.floor(ya.time().unix / 30))
+end
+
 --- A catalog entry as a Yazi file. Unchanged connected originals become the
 --- file's backing, so previews and MIME detection read the real bytes.
-local function entry_file(url, e)
-	local stat = Stat { mode = e.dir and DIR_MODE or FILE_MODE, len = e.size, mtime = e.mtime, ctime = url_time(url) }
+local function entry_file(url, e, listed)
+	local stat = Stat {
+		mode = e.dir and DIR_MODE or FILE_MODE,
+		len = e.size,
+		mtime = e.mtime,
+		ctime = e.dir and listed or url_time(url),
+	}
 	local backing = not e.dir and e.state == "available" and e.original or nil
 	return File { url = url, stat = stat, lstat = stat, backing = backing and Path.os(backing) }
 end
 
-local function file(job, url)
+--- The file for a URL. `listed` is the folder's `listing_time`, when the caller already has it.
+local function file(job, url, listed)
 	local loc = locate(url)
 	if loc.kind ~= "item" or loc.path == "" then
-		return dir_file(url)
+		return dir_file(url, listed or listing_time(job))
 	end
 
 	local value, err = run(job, { "stat", loc.disk, loc.path })
 	if not value then
 		return nil, err
 	end
-	return entry_file(url, value.entry)
+	return entry_file(url, value.entry, value.entry.dir and (listed or listing_time(job)) or nil)
+end
+
+--- Nothing when the folder's listing is still current, so Yazi keeps it; the folder's file otherwise.
+local function revalidate(job)
+	local listed, old = listing_time(job), job.file.stat.ctime
+	if listed and old and old.unix == listed then
+		return nil
+	end
+	return file(job, job.file.url, listed)
 end
 
 local function child(url, name) return url:join(name):with_domain(name) end
@@ -149,6 +196,9 @@ local function read_dir(job)
 			coroutine.yield(dir_file(child(job.url, disk.folder)))
 		end
 	elseif loc.kind == "search" then
+		if value.total > #value.hits and first_time(loc.query) then
+			warn(string.format("Showing %d of %d matches for “%s”. Narrow the search to see the rest.", #value.hits, value.total, loc.query))
+		end
 		for _, hit in ipairs(value.hits) do
 			local name = hit.disk_folder .. SEP .. hit.path:gsub("/", SEP)
 			coroutine.yield(entry_file(child(job.url, name), hit))
@@ -221,7 +271,7 @@ function M:provide(job)
 	elseif op == "File" then
 		return file(job, job.url)
 	elseif op == "Revalidate" then
-		return file(job, job.file.url)
+		return revalidate(job)
 	elseif op == "ReadDir" then
 		return ya.co(function() return read_dir(job) end)
 	elseif op == "CopyTo" then
@@ -265,7 +315,7 @@ function M:peek(job)
 		"The disk is disconnected, or the file changed since Neotoma cataloged it.",
 		"",
 		"Size:      " .. ya.readable_size(f.stat.len or 0),
-		"Modified:  " .. (f.stat.mtime and f.stat.mtime:format("%c") or "-"),
+		"Modified:  " .. (f.stat.mtime and tostring(f.stat.mtime) or "-"),
 	}
 	ya.preview_widget(job, ui.Text(lines):area(job.area):wrap(ui.Wrap.YES))
 end
