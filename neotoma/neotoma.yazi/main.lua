@@ -116,23 +116,57 @@ end
 -- The path alone: the same file's URL is spelled differently when it is listed and when it is looked up.
 local function url_time(url) return text_time(tostring(url.path)) end
 
+--- What was last learned about the catalog, kept in Yazi's own state because
+--- each call into the plugin starts from a fresh Lua state: the tool's `files`
+--- and `revision` values, and the time until which they need not be asked for
+--- again.
+local recall = ya.sync(function(state)
+	local r = state.catalog or {}
+	return r.files, r.revision, r.rest or 0
+end)
+
+local remember = ya.sync(function(state, files, revision, rest)
+	state.catalog = { files = files, revision = revision, rest = rest }
+end)
+
 --- A number for the state a folder listing was made from, kept in the folder's
 --- change time.
 ---
 --- Yazi asks every two seconds whether each open folder of a virtual
 --- filesystem changed, and lists it again unless the answer is no. Listing
 --- runs the `neotoma` tool, which opens the library. So the answer is worked
---- out cheaply: `neotoma revision` reads three file times without opening the
---- library, and a folder is listed again only when that value changes, or
---- every half minute so that a disk being connected or disconnected shows up.
---- An older `neotoma` without `revision` gives no value, and every folder is
---- then listed again each time, as before.
+--- out as cheaply as it can be. `neotoma revision` gives two values: `files`,
+--- three file times read without opening the library, which move on every
+--- write Neotoma makes; and `revision`, the catalog's own state, which takes
+--- opening the library. Handing back the `files` value last seen gets `files`
+--- alone while nothing was written. One answer serves every open folder, and
+--- after the library has been opened it is not asked again for six seconds, so
+--- a Neotoma that writes all the time costs one opening in six seconds, not a
+--- listing of every folder every two.
+---
+--- A folder is listed again when `revision` changes, or every half minute so
+--- that a disk being connected or disconnected shows up. A `neotoma` that
+--- gives no such values is not asked again for six seconds, and every folder
+--- is then listed again each time.
 local function listing_time(job)
-	local value = run(job, { "revision" })
-	if not value or not value.revision then
+	local now = ya.time().unix
+	local files, revision, rest = recall()
+	if now >= rest then
+		local value = run(job, files and revision and { "revision", "--after", files } or { "revision" })
+		if not value or not value.files then
+			files, revision = nil, nil
+			remember(nil, nil, now + 6)
+		elseif value.revision then
+			files, revision = value.files, value.revision
+			remember(files, revision, now + 6)
+		else
+			remember(files, revision, now + 1.5)
+		end
+	end
+	if not revision then
 		return nil
 	end
-	return text_time(tostring(value.revision) .. ":" .. math.floor(ya.time().unix / 30))
+	return text_time(revision .. ":" .. math.floor(now / 30))
 end
 
 --- A catalog entry as a Yazi file. Unchanged connected originals become the

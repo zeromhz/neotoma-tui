@@ -50,10 +50,12 @@ Keys: `g n` opens the Neotoma disk list, and `g N` searches all catalogs.
 
 A search shows at most 200 matches and says once, in a notice, when there are more.
 
-Yazi asks every two seconds whether an open folder changed. The plugin answers with `neotoma revision`, which reads
-three file times without opening the library, and lists a folder again only when that changes or half a minute has
-passed (so a disk being connected or disconnected shows up). With an older `neotoma` that has no `revision`, every
-open folder is listed again each time.
+Yazi asks every two seconds whether an open folder changed. The plugin answers with `neotoma revision`, which gives
+two values: `files`, three file times read without opening the library, and `revision`, the catalog's own state. While
+nothing is written to the library only the file times are read. When Neotoma writes, the library is opened to read the
+catalog's state, at most once in six seconds for all open folders together. A folder is listed again only when that
+state changes or half a minute has passed (so a disk being connected or disconnected shows up). With a `neotoma` that
+gives no such values, every open folder is listed again each time.
 
 ## Staying in sync with upstream
 
